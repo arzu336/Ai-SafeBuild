@@ -66,3 +66,21 @@ def evaluate_safety(data):
         "no_helmet": no_helmet,
         "no_vest": no_vest
     }
+    
+def generate_alert(safety_result):
+    if safety_result["risk"] == "Yüksek":
+        return {
+            "status": True,
+            "message": "🚨 Kritik güvenlik ihlali tespit edildi!"
+        }
+
+    if safety_result["no_helmet"] > 0:
+        return {
+            "status": True,
+            "message": "⚠️ Baret kullanmayan çalışan tespit edildi!"
+        }
+
+    return {
+        "status": False,
+        "message": "✅ Kritik bir durum yok"
+    }    

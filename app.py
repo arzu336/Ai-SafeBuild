@@ -2,8 +2,7 @@ import streamlit as st
 import os
 import pandas as pd
 from datetime import datetime
-from detector import detect_ppe
-from rules import evaluate_safety
+import requests
 
 st.set_page_config(
     page_title="AI Construction Safety Monitor",
@@ -14,45 +13,49 @@ st.set_page_config(
 LOG_FILE = "violation_log.csv"
 
 def get_status_badge(risk_level):
-    if risk_level == "Düşük":
+    if risk_level == "LOW":
         return "🟢 Güvenli"
-    elif risk_level == "Orta":
+    elif risk_level == "MEDIUM":
         return "🟡 Dikkat"
-    elif risk_level == "Yüksek":
+    elif risk_level == "HIGH":
         return "🔴 Kritik"
     return "⚪ Bilinmiyor"
 
-def get_recommendations(safety_result):
+def get_recommendations(api_result):
     recommendations = []
 
-    if safety_result["no_helmet"] > 0:
+    no_helmet = api_result.get("no_helmet", 0)
+    no_vest = api_result.get("no_vest", 0)
+    risk_level = api_result.get("risk_level", "LOW")
+
+    if no_helmet > 0:
         recommendations.append("Baret kullanmayan çalışanlar için sahada anlık KKE kontrolü yapılmalı.")
 
-    if safety_result["no_vest"] > 0:
+    if no_vest > 0:
         recommendations.append("Reflektif yelek kullanımı denetlenmeli ve eksikler giderilmeli.")
 
-    if safety_result["risk"] == "Yüksek":
+    if risk_level == "HIGH":
         recommendations.append("Saha sorumlusu tarafından ilgili bölgede acil güvenlik denetimi başlatılmalı.")
         recommendations.append("İhlal tespit edilen alan geçici olarak kontrol altına alınmalı.")
 
-    if safety_result["risk"] == "Orta":
+    if risk_level == "MEDIUM":
         recommendations.append("Vardiya öncesi kısa güvenlik bilgilendirmesi yapılmalı.")
 
-    if safety_result["risk"] == "Düşük":
+    if risk_level == "LOW":
         recommendations.append("Mevcut saha düzeni korunmalı ve periyodik izleme sürdürülmeli.")
 
     return recommendations
 
-def build_summary_record(file_name, detection_result, safety_result):
+def build_summary_record(file_name, api_result):
     return {
         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "file_name": file_name,
-        "person_count": detection_result["person"],
-        "helmet_count": detection_result["helmet"],
-        "vest_count": detection_result["vest"],
-        "no_helmet_count": safety_result["no_helmet"],
-        "no_vest_count": safety_result["no_vest"],
-        "risk_level": safety_result["risk"]
+        "person_count": api_result["worker_count"],
+        "helmet_count": api_result["helmet"],
+        "vest_count": api_result["vest"],
+        "no_helmet_count": api_result["no_helmet"],
+        "no_vest_count": api_result["no_vest"],
+        "risk_level": api_result["risk_level"]
     }
 
 def append_to_log(record, log_file=LOG_FILE):
@@ -98,97 +101,129 @@ if uploaded_file is not None:
     with open(image_path, "wb") as f:
         f.write(uploaded_file.read())
 
-    with st.spinner("Görsel analiz ediliyor..."):
-        detection_result = detect_ppe(image_path)
-        safety_result = evaluate_safety(detection_result)
+    st.subheader("Analiz İşlemi")
 
-    status_badge = get_status_badge(safety_result["risk"])
-    recommendations = get_recommendations(safety_result)
+    if st.button("API ile Analiz Et"):
+        try:
+            with st.spinner("Görsel API üzerinden analiz ediliyor..."):
+                with open(image_path, "rb") as img_file:
+                    files = {
+                        "file": (uploaded_file.name, img_file, uploaded_file.type)
+                    }
 
-    summary_record = build_summary_record(
-        uploaded_file.name,
-        detection_result,
-        safety_result
-    )
+                    response = requests.post(
+                        "http://127.0.0.1:8000/analyze",
+                        files=files,
+                        timeout=60
+                    )
 
-    # Aynı analiz tekrar tekrar log'a eklenmesin diye butonla kaydet
-    if "last_record" not in st.session_state:
-        st.session_state.last_record = None
+                data = response.json()
+                st.write("API'den gelen veri:", data)
 
-    st.subheader("Genel Durum")
-    st.info(f"Durum: {status_badge} | Risk Seviyesi: {safety_result['risk']}")
+            if "error" in data:
+                st.error(f"API hata döndürdü: {data['error']}")
+            else:
+                st.session_state.api_result = data
+                st.success("Analiz tamamlandı.")
 
-    col_left, col_right = st.columns([1.3, 1])
+        except Exception as e:
+            st.error(f"API analiz hatası: {e}")
 
-    with col_left:
-        st.subheader("Yüklenen Görsel")
-        st.image(image_path, caption="Orijinal Görsel", use_container_width=True)
+    if "api_result" in st.session_state:
+        api_result = st.session_state.api_result
 
-        st.subheader("Model Çıktısı")
-        st.image(
-            detection_result["output_image"],
-            caption="Tespit Sonucu",
-            use_container_width=True
+        risk_value = api_result.get("risk_level", api_result.get("risk", "Bilinmiyor"))
+        status_badge = get_status_badge(risk_value)
+        recommendations = get_recommendations(api_result)
+
+        summary_record = build_summary_record(
+            uploaded_file.name,
+            api_result
         )
 
-    with col_right:
-        st.subheader("Analiz Özeti")
+        if "last_record" not in st.session_state:
+            st.session_state.last_record = None
 
-        metric_col1, metric_col2 = st.columns(2)
-        with metric_col1:
-            st.metric("Çalışan Sayısı", detection_result["person"])
-            st.metric("Baret Sayısı", detection_result["helmet"])
-            st.metric("Yelek Sayısı", detection_result["vest"])
+        st.subheader("🚨 Sistem Uyarısı")
 
-        with metric_col2:
-            st.metric("Baretsiz Çalışan", safety_result["no_helmet"])
-            st.metric("Yeleksiz Çalışan", safety_result["no_vest"])
-            st.metric("Risk Seviyesi", safety_result["risk"])
+        if risk_value == "HIGH":
+            st.error("Kritik güvenlik ihlali tespit edildi.")
+        elif risk_value == "MEDIUM":
+            st.warning("Orta seviyede güvenlik riski tespit edildi.")
+        else:
+            st.success("Saha güvenlik durumu iyi görünüyor.")
 
-        st.subheader("Uyarılar")
-        for alert in safety_result["alerts"]:
-            st.warning(alert)
+        st.subheader("Genel Durum")
+        st.info(f"Durum: {status_badge} | Risk Seviyesi: {api_result['risk_level']}")
 
-        st.subheader("Önerilen Aksiyonlar")
-        for rec in recommendations:
-            st.write(f"- {rec}")
+        col_left, col_right = st.columns([1.3, 1])
 
-    st.markdown("---")
+        with col_left:
+            st.subheader("Yüklenen Görsel")
+            st.image(image_path, caption="Orijinal Görsel", use_container_width=True)
 
-    st.subheader("Tespit Detayları")
+            st.subheader("Model Çıktısı")
+            st.image(
+                api_result["output_image"],
+                caption="Tespit Sonucu",
+                use_container_width=True
+            )
 
-    if detection_result["boxes"]:
-        df_boxes = pd.DataFrame(detection_result["boxes"])
-        df_boxes["conf"] = df_boxes["conf"].round(3)
+        with col_right:
+            st.subheader("Analiz Özeti")
 
-        st.dataframe(
-            df_boxes[["class", "conf", "x1", "y1", "x2", "y2"]],
-            use_container_width=True
+            metric_col1, metric_col2 = st.columns(2)
+            with metric_col1:
+                st.metric("Çalışan Sayısı", api_result.get("worker_count", 0))
+                st.metric("Baret Sayısı", api_result.get("helmet", 0))
+                st.metric("Yelek Sayısı", api_result.get("vest", 0))
+
+                st.metric("Baretsiz Çalışan", api_result.get("no_helmet", 0))
+                st.metric("Yeleksiz Çalışan", api_result.get("no_vest", 0))
+                st.metric("Risk Seviyesi", api_result.get("risk_level", "Bilinmiyor"))
+
+            st.subheader("Uyarılar")
+            for alert in api_result.get("alerts", []):
+                st.warning(alert)
+
+            st.subheader("Önerilen Aksiyonlar")
+            for rec in recommendations:
+                st.write(f"- {rec}")
+
+        st.markdown("---")
+
+        st.subheader("Tespit Detayları")
+
+        if api_result.get("boxes"):
+            df_boxes = pd.DataFrame(api_result["boxes"])
+            df_boxes["conf"] = df_boxes["conf"].round(3)
+
+            st.dataframe(
+                df_boxes[["class", "conf", "x1", "y1", "x2", "y2"]],
+                use_container_width=True
+            )
+        else:
+            st.info("Herhangi bir nesne tespit edilmedi.")
+
+        st.markdown("---")
+
+        st.subheader("Analiz Kaydı ve Rapor")
+
+        summary_df = pd.DataFrame([summary_record])
+        st.dataframe(summary_df, use_container_width=True)
+
+        csv_bytes = summary_df.to_csv(index=False).encode("utf-8-sig")
+        st.download_button(
+            label="Bu Analizi CSV Olarak İndir",
+            data=csv_bytes,
+            file_name=f"analysis_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+            mime="text/csv"
         )
-    else:
-        st.info("Herhangi bir nesne tespit edilmedi.")
 
-    st.markdown("---")
-
-    st.subheader("Analiz Kaydı ve Rapor")
-
-    summary_df = pd.DataFrame([summary_record])
-    st.dataframe(summary_df, use_container_width=True)
-
-    csv_bytes = summary_df.to_csv(index=False).encode("utf-8-sig")
-    st.download_button(
-        label="Bu Analizi CSV Olarak İndir",
-        data=csv_bytes,
-        file_name=f"analysis_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-        mime="text/csv"
-    )
-
-    if st.button("Analizi İhlal Geçmişine Kaydet"):
-        all_logs = append_to_log(summary_record)
-        st.session_state.last_record = summary_record
-        st.success("Analiz kaydı violation_log.csv dosyasına eklendi.")
-
-    st.success("Analiz tamamlandı.")
+        if st.button("Analizi İhlal Geçmişine Kaydet"):
+            all_logs = append_to_log(summary_record)
+            st.session_state.last_record = summary_record
+            st.success("Analiz kaydı violation_log.csv dosyasına eklendi.")
 
 else:
     st.info("Başlamak için bir şantiye görseli yükleyin.")
@@ -221,3 +256,16 @@ if not log_df.empty:
     )
 else:
     st.info("Henüz kayıtlı ihlal geçmişi bulunmuyor.")
+
+st.subheader("API Bağlantı Testi")
+
+if st.button("API durumunu kontrol et"):
+    try:
+        response = requests.get("http://127.0.0.1:8000/status", timeout=10)
+        data = response.json()
+
+        st.success("API bağlantısı başarılı")
+        st.json(data)
+
+    except Exception as e:
+        st.error(f"API bağlantı hatası: {e}")

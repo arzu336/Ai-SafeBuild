@@ -14,10 +14,14 @@ def detect_ppe(image_path, output_dir="outputs"):
     boxes = []
     counts = {"helmet": 0, "vest": 0, "person": 0}
 
+    print("Model class names:", model.names)
+
     for box in result.boxes:
         cls_id = int(box.cls[0].item())
         conf = float(box.conf[0].item())
-        class_name = model.names[cls_id]
+        class_name = str(model.names[cls_id]).lower()
+
+        print("Tespit edilen sınıf:", class_name, "conf:", conf)
 
         x1, y1, x2, y2 = box.xyxy[0].tolist()
 
@@ -30,12 +34,18 @@ def detect_ppe(image_path, output_dir="outputs"):
             "y2": y2
         })
 
-        if class_name in counts:
-            counts[class_name] += 1
+        if class_name in ["helmet", "hardhat", "hard_hat"]:
+            counts["helmet"] += 1
+        elif class_name in ["vest", "safety_vest", "reflective_vest"]:
+            counts["vest"] += 1
+        elif class_name in ["person", "worker", "people"]:
+            counts["person"] += 1
 
     output_path = os.path.join(output_dir, "result.jpg")
     plotted = result.plot()
     Image.fromarray(plotted[..., ::-1]).save(output_path)
+
+    print("Son sayımlar:", counts)
 
     return {
         "helmet": counts["helmet"],
