@@ -3,6 +3,7 @@ import shutil
 from detector import detect_ppe
 import threading
 import time
+from video_processor import process_video
 
 app = FastAPI()
 
@@ -19,7 +20,7 @@ def get_risk_level(score):
         return "MEDIUM"
     else:
         return "HIGH"
-   
+
 latest_data = {
     "worker_count": 0,
     "helmet": 0,
@@ -29,10 +30,11 @@ latest_data = {
     "safety_score": 100,
     "risk_level": "LOW"
 }
+
 def detection_loop():
     while True:
         try:
-            result = detect_ppe("test.jpg")  # şimdilik test.jpg, sonra video yapacağız
+            result = detect_ppe("test.jpg")
 
             helmet = result["helmet"]
             vest = result["vest"]
@@ -59,13 +61,11 @@ def detection_loop():
         except Exception as e:
             print("Detection error:", e)
 
-        time.sleep(2)  # 2 saniyede bir çalış   
-   
+        time.sleep(2)
 
 @app.get("/")
 def home():
     return {"message": "AI Construction Safety Monitor API çalışıyor"}
-
 
 @app.post("/analyze")
 async def analyze(file: UploadFile = File(...)):
@@ -111,9 +111,24 @@ async def analyze(file: UploadFile = File(...)):
     except Exception as e:
         return {"error": str(e)}
 
+@app.post("/analyze-video")
+async def analyze_video(file: UploadFile = File(...)):
+    try:
+        file_path = f"temp_{file.filename}"
+        output_path = f"processed_{file.filename.rsplit('.', 1)[0]}.mp4"
+
+        with open(file_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+
+        result = process_video(file_path, output_path=output_path, frame_skip=5)
+        return result
+
+    except Exception as e:
+        return {"error": str(e)}
+   
 @app.get("/status")
 def get_status():
     return latest_data
-    
+
 thread = threading.Thread(target=detection_loop, daemon=True)
-thread.start()    
+thread.start()

@@ -88,6 +88,82 @@ st.title("🏗️ AI Construction Safety Monitor")
 st.caption("Şantiye güvenliği için yapay zeka destekli PPE izleme paneli")
 
 st.markdown("---")
+st.subheader("🎥 Video Analizi")
+
+video_file = st.file_uploader(
+    "Video yükleyin",
+    type=["mp4", "avi"]
+)
+
+if video_file is not None:
+    os.makedirs("sample_data", exist_ok=True)
+    video_path = os.path.join("sample_data", video_file.name)
+
+    with open(video_path, "wb") as f:
+        f.write(video_file.read())
+
+    st.video(video_path)
+
+    if st.button("Videoyu Analiz Et"):
+        try:
+            with st.spinner("Video analiz ediliyor... Bu işlem biraz sürebilir."):
+                with open(video_path, "rb") as vf:
+                    files = {
+                        "file": (video_file.name, vf, video_file.type)
+                    }
+
+                    response = requests.post(
+                        "http://127.0.0.1:8000/analyze-video",
+                        files=files,
+                        timeout=300
+                    )
+
+                data = response.json()
+
+            if "error" in data:
+                st.error(f"Video analiz hatası: {data['error']}")
+            else:
+                st.success("Video analizi tamamlandı")
+
+                st.subheader("📊 Video Analiz Özeti")
+
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Toplam Frame", data.get("total_frames", 0))
+                    st.metric("İşlenen Frame", data.get("processed_frames", 0))
+                    st.metric("Frame Skip", data.get("frame_skip", 0))
+
+                with col2:
+                    st.metric("Toplam Baretsiz", data.get("total_no_helmet", 0))
+                    st.metric("Toplam Yeleksiz", data.get("total_no_vest", 0))
+                    st.metric("En Kötü Frame", data.get("worst_frame_index", -1))
+
+                with col3:
+                    st.metric("Ortalama Güvenlik Skoru", data.get("average_safety_score", 100))
+                    st.metric("Risk Seviyesi", data.get("risk_level", "Bilinmiyor"))
+                    st.metric("En Düşük Skor", data.get("worst_score", 100))
+
+                st.subheader("🚨 Video Uyarıları")
+                for alert in data.get("alerts", []):
+                    st.warning(alert)
+
+                st.subheader("🎬 İşlenmiş Video")
+                output_video_path = data.get("output_video")
+
+                if output_video_path and os.path.exists(output_video_path):
+                    st.video(output_video_path)
+
+                    with open(output_video_path, "rb") as video_out:
+                        st.download_button(
+                            label="İşlenmiş Videoyu İndir",
+                            data=video_out,
+                            file_name=os.path.basename(output_video_path),
+                            mime="video/mp4"
+                        )
+                else:
+                    st.warning("İşlenmiş video bulunamadı.")
+        except Exception as e:
+            st.error(f"Video analiz API bağlantı hatası: {e}")
 
 uploaded_file = st.file_uploader(
     "Bir şantiye görseli yükleyin",
